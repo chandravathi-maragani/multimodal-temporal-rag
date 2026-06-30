@@ -1,0 +1,23 @@
+# ===Security & API Keys ===
+.env
+groq_api_key.txt
+
+# === Local Databases & Vector Stores ===
+my_langchain_chroma_db/
+my_parent_documents_store/
+my_notebook_json_backups/
+temporal_rag_db/
+
+# === Python & Jupyter System Junk ===
+anaconda_projects/
+__pycache__/
+.ipynb_checkpoints/
+
+# === Raw Data & Scanned Source Files ===
+*.pdf
+structured_books.json
+
+# === Untracked Notebook Drafts  / Scratchpads ===
+Untitled.ipynb
+untitled.txt
+my_handwritten_notes_rag_experimented.ipynb
