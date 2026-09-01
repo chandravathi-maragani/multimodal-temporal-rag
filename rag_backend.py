@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+import asyncio
 import os
 import re
 import json
@@ -105,10 +106,11 @@ def generate_metadata_source_of_truth(json_dir_path: str) -> dict:
     }
 
 # Safe initialization for Streamlit imports
-try:
-    metadata_directory = generate_metadata_source_of_truth(r"D:\Multimodal-Temporal-RAG\my_notebook_json_backups")
-except Exception:
-    metadata_directory = {"filenames": [], "topics": [], "dates": []}
+def get_cached_metadata():
+    try:
+        return generate_metadata_source_of_truth(r"D:\Multimodal-Temporal-RAG\my_notebook_json_backups")
+    except Exception:
+        return {"filenames": [], "topics": [], "dates": []}
 
 # -----------------------------------------------------------------------------
 # 2. FUZZY MATCH EXTRACTION ENGINE
@@ -168,49 +170,65 @@ def extract_metadata_via_fuzzy_match(user_query: str, metadata_directory: dict) 
 # -----------------------------------------------------------------------------
 # 3. HYBRID RETRIEVER ENGINE
 # -----------------------------------------------------------------------------
-def hybrid_regex_retriever(query, filename_filter=None, topic_filter=None, date_filter=None):
-    # Reset search kwargs to a completely clean, vanilla state to clear library bugs
-    base_parent_retriever.search_kwargs = {"k": 20} 
+async def hybrid_regex_retriever_async(query, filename_filter=None, topic_filter=None, date_filter=None):
+    # 1. Broaden the initial vector search pool if the user is asking a vague temporal question
+    if date_filter and any(keyword in query.lower() for keyword in ["what notes", "what did i write", "what happened", "query", "lists"]):
+        base_parent_retriever.search_kwargs = {"k": 100}
+    else:
+        base_parent_retriever.search_kwargs = {"k": 20} 
     
-    # Fetch full parent documents normally without database-level constraints
-    all_docs = base_parent_retriever.invoke(query)
+    # Extract the base documents from your store
+    all_docs = await base_parent_retriever.ainvoke(query)
     
     if not filename_filter and not topic_filter and not date_filter:
         return all_docs[:4]
         
     filtered_docs = []
+    
+    # 2. RUN INDEPENDENT VALIDATION LOOPS FOR EACH FILTER KEY
     for doc in all_docs:
         meta = doc.metadata or {}
+        page_text = doc.page_content.lower()
         
-        # 1. Check Filename match if requested
+        # --- A. DATE FILTER KEYWORD CHECK ---
+        if date_filter:
+            target_date = str(date_filter).lower().strip()
+            clean_target_str = target_date.replace("2025", "").replace("2026", "").replace("-", " ").replace("/", " ").replace(":", " ").strip()
+            raw_tokens = set(re.findall(r'[a-z0-9]+', clean_target_str))
+            clean_target_tokens = {t[:3] if (not t.isdigit() and len(t) > 3) else t for t in raw_tokens}
+
+            clean_pool_text = page_text.replace("-", " ").replace("/", " ").replace(":", " ")
+            pool_tokens = set(re.findall(r'[a-z0-9]+', clean_pool_text))
+            normalized_pool_tokens = {t[:3] if (not t.isdigit() and len(t) > 3) else t for t in pool_tokens}
+
+            is_date_in_chunk = clean_target_tokens.issubset(normalized_pool_tokens) or clean_target_str in clean_pool_text
+            if not is_date_in_chunk:
+                continue # Skip this document chunk if the date isn't explicitly mentioned
+
+        # --- B. FILENAME FILTER METADATA CHECK (UNTOUCHED) ---
         if filename_filter:
             doc_file = str(meta.get("filename", "")).lower()
             target_file = str(filename_filter).lower()
             if target_file not in doc_file and doc_file not in target_file:
-                continue
+                continue # Skip if filenames don't align
                 
-        # 2. Check Topic match if requested
+        # --- C. TOPIC FILTER METADATA CHECK (UNTOUCHED) ---
         if topic_filter:
             doc_topic = str(meta.get("topic", "")).lower().strip()
             target_topic = str(topic_filter).lower().strip()
             if target_topic not in doc_topic and doc_topic not in target_topic:
-                continue
-                
-        # 3. Check Date match if requested
-        if date_filter:
-            doc_date = str(meta.get("date", "")).lower().strip()
-            target_date = str(date_filter).lower().strip()
-            if target_date not in doc_date and doc_date not in target_date:
-                continue
-                
+                continue # Skip if topics don't align
+
+        # If a document survives all active filter blocks, add it to the final pool
         filtered_docs.append(doc)
         
-    # CRITICAL CHANGE: If the user's manual filter combination wiped out all matches,
-    # return an explicit flag instead of silently falling back to irrelevant documents.
+    # If the user's filter intersections leave you with an empty list, flag it cleanly
     if not filtered_docs:
         return "FILTER_MISMATCH"
         
     return filtered_docs[:4]
+
+
     
            
 # -----------------------------------------------------------------------------
@@ -229,14 +247,14 @@ QUESTION:
 ANSWER:
 """
 custom_prompt = ChatPromptTemplate.from_template(prompt_template)
-cloud_llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
+cloud_llm = ChatGroq(model="openai/gpt-oss-120b", temperature=0)
 
 def format_docs(docs):
     return "\n\n".join(doc.page_content for doc in docs)
 
 # Also update execute_rag_pipeline right below it to handle the flag:
-def execute_rag_pipeline(input_data: dict) -> str:
-    raw_docs = hybrid_regex_retriever(
+async def execute_rag_pipeline_async(input_data: dict) -> dict | str:
+    raw_docs = await hybrid_regex_retriever_async(
         query=input_data["question"],
         filename_filter=input_data.get("filename"),
         topic_filter=input_data.get("topic"),
@@ -249,12 +267,20 @@ def execute_rag_pipeline(input_data: dict) -> str:
         
     context_str = format_docs(raw_docs)
     chain_runner = custom_prompt | cloud_llm | StrOutputParser()
-    return chain_runner.invoke({"context": context_str, "question": input_data["question"]})   
+    answer = await chain_runner.ainvoke({"context": context_str, "question": input_data["question"]})   
+
+    return {
+        "answer":answer,
+        "context":context_str
+    }
 
 # -----------------------------------------------------------------------------
 # 5. CORE SYSTEM WRAPPERS FOR APPS
 # -----------------------------------------------------------------------------
-def query_rag_system(user_query: str, filename_filter=None, topic_filter=None, date_filter=None) -> str:
+# -----------------------------------------------------------------------------
+# 5. CORE SYSTEM WRAPPERS FOR APPS
+# -----------------------------------------------------------------------------
+async def query_rag_system_async(user_query: str, filename_filter=None, topic_filter=None, date_filter=None) -> dict | str:
     """
     Accepts a raw text query string along with manual dropdown sidebar overrides.
     """
@@ -262,7 +288,8 @@ def query_rag_system(user_query: str, filename_filter=None, topic_filter=None, d
     final_topic = topic_filter
     final_date = date_filter
 
-    detected = extract_metadata_via_fuzzy_match(user_query, metadata_directory)
+    current_inventory = get_cached_metadata()
+    detected = extract_metadata_via_fuzzy_match(user_query, current_inventory)
     
     if not final_filename:
         final_filename = detected.get("filename")
@@ -271,12 +298,28 @@ def query_rag_system(user_query: str, filename_filter=None, topic_filter=None, d
     if not final_date:
         final_date = detected.get("date")
         
+    # OPTIMIZATION: Isolate Bare Month and Day roots to assist ChromaDB semantic scoring
+    optimized_query = user_query
+    if final_date:
+        clean_date_text = str(final_date).replace("2025", "").replace("2026", "")
+        clean_date_text = clean_date_text.replace("-", " ").replace("/", " ").replace(":", " ").strip()
+        
+        tokens = re.findall(r'[a-z0-9]+', clean_date_text.lower())
+        day_token = next((t for t in tokens if t.isdigit()), "")
+        month_token = next((t for t in tokens if not t.isdigit()), "")
+        
+        # Slice month down to 3 characters (e.g. "january" -> "jan") to guarantee match hits
+        if len(month_token) > 3:
+            month_token = month_token[:3]
+            
+        optimized_query = f"{user_query} {month_token} {day_token}".strip()
+        
     payload = {
-        "question": user_query,
+        "question": optimized_query,
         "filename": final_filename,
         "topic": final_topic,
         "date": final_date
     }
     
     # Call the sequential pipeline execution engine directly
-    return execute_rag_pipeline(payload)
+    return await execute_rag_pipeline_async(payload)
