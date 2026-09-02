@@ -1,37 +1,48 @@
 # Multimodal Temporal RAG Engine
 
-A Retrieval-Augmented Generation (RAG) system designed to parse, index, filter, and query complex scanned handwritten notebooks and technical study materials. By leveraging a Parent-Child chunking architecture, this application ensures the Large Language Model always reviews full, coherent pages instead of fragmented text snippets, while dynamically routing user scopes via explicit or fuzzy boundaries.
+A production-grade Retrieval-Augmented Generation (RAG) system built to parse, index, filter, and query complex scanned handwritten notebooks and technical study materials. By leveraging a Parent-Child chunking architecture, this system ensures the LLM reviews full, coherent source pages rather than fragmented snippets, while dynamically routing queries through automated fuzzy matching and manual metadata controls.
+
+The system features an asynchronous FastAPI application wrapper equipped with background LLM-as-a-Judge evaluations for continuous monitoring of retrieval quality.
 
 ## Key Architectural Features
 
-* **Multimodal Extraction:** Handles unstructured layout structures from scanned handwritten PDF volumes mapped with structured metadata schema profiles.
-* **Parent Document Retrieval:** Small text fragments (250-token child chunks) are embedded via a local all-MiniLM-L6-v2 model and indexed inside ChromaDB, while full-page layouts are mapped onto local hard drive storage utilizing a classic key-value file store structure.
-* **Dual-Layer Metadata Router:** Integrates explicit sidebar selection dropdowns seamlessly alongside an automated Natural Language Fuzzy Matcher. The system auto-extracts file names, calendar dates, or topics directly out of raw conversational queries.
-* **Scope Collision Safeguards:** Features a smart execution engine wrapper that returns a descriptive `FILTER_MISMATCH` boundary alert to users if manually chosen sidebar boundaries conflict with the semantic layout text.
-* **Cloud Synthesis Engine:** Connects to `llama-3.3-70b-versatile` via Groq using LangChain Expression Language (LCEL) for precise, zero-temperature factual answers.
-* **Dynamic Inventory Registry:** Automatically bootstraps the interface on boot by reading active catalog entries straight from your local backend metadata collection inventory matrix.
+* **Parent-Child Retrieval Architecture:** Small text fragments (250-token child chunks embedded via local sentence-transformers/all-MiniLM-L6-v2) are indexed inside ChromaDB for precise vector search. Retrieved hits automatically map to complete parent documents stored in a disk-backed key-value store (LocalFileStore).
+
+* **Dual-Layer Metadata Router:** Integrates explicit metadata overrides (filename, topic, date) alongside an automated natural language fuzzy matcher powered by difflib. The router extracts dates, titles, and topics directly from conversational queries.
+
+* **Scope Collision Safeguards:** Enforces strict boolean verification loops across extracted dates, filenames, and topics to prevent hallucinated hits. If active filters conflict with document text, the engine returns a clean FILTER_MISMATCH signal.
+
+* **FastAPI Server Endpoint:** Serves high-throughput asynchronous inference via a production-ready /query POST endpoint with strict validation schemas, global exception handling, and custom timeout protection.
+
+* **Asynchronous RAG Triad Evaluation:** Executes background evaluation tasks using ChatGroq (openai/gpt-oss-120b) structured outputs to score Context Relevance, Faithfulness, and Answer Relevance (1–5 scale) for incoming queries without adding user latency.
+
+* **Metrics Persistence & Inspection:** Logs latency measurements and structured triad evaluation breakdown objects directly into a local SQLite database (rag_metrics.db), accessible via terminal inspection tools.
 
 ---
 ## Tech Stack and Dependencies
 
-* **Orchestration:** LangChain Core, LangChain Classic, LCEL
-* **Vector Database:** ChromaDB (Collection: `notebooks_parent_child_index`)
-* **Embeddings:** HuggingFace Transformers (`sentence-transformers/all-MiniLM-L6-v2` executed locally)
-* **Large Language Model:** Groq Cloud API Engine (`llama-3.3-70b-versatile`)
-* **User Interface Framework:** Streamlit Dashboard Engine
-* **Environment Management:** Python, Conda, `python-dotenv`
+* **Orchestration & LCEL:** langchain-core, langchain-classic, langchain-chroma, langchain-groq, langchain-huggingface
+
+* **Vector Store & Storage:** ChromaDB (notebooks_parent_child_index), LocalFileStore
+
+* **Embeddings:** sentence-transformers/all-MiniLM-L6-v2 (Hugging Face)
+
+* **LLM Engine:** Groq Cloud API (openai/gpt-oss-120b)
+
+* **API Framework & Data Validation:** FastAPI, Pydantic, Uvicorn
+
+* **Evaluation & Persistence:** LLM-as-a-Judge (RAG Triad), sqlite3, pandas
 
 ---
 
-## 📂 Project Structure
+##  Project Structure
 
 ```plaintext
-├── .env                                  # Secure API credentials (Local execution only)
-├── .gitignore                            # Excludes tracking local binary databases and notes
-├── README.md                             # Repository documentation and portfolio overview
-├── app.py                                # Streamlit dashboard interface with hybrid fuzzy-matching UI
-├── rag_backend.py                        # Core LCEL pipeline, ParentDocumentRetriever, and data models
-├── prototype_handwritten_notes_rag.ipynb # Primary development playground for text ingestion mapping
-└── metadata_cache.ipynb                  # Diagnostic script analyzing nested JSON schemas & cache indexing
+Multimodal-Temporal-RAG/
+├── .gitignore             # Ignored directories, environment keys, and SQLite binaries
+├── README.md              # Project documentation and architecture blueprint
+├── rag_backend.py         # Core LCEL pipeline, metadata fuzzy engine, and hybrid retriever
+├── server_test.py         # FastAPI application with background RAG Triad evaluator
+└── read_db.py             # CLI utility for inspecting SQLite evaluation logs
 
-💡Repository Note: Local storage directories generated by the execution pipeline (/my_langchain_chroma_db and /my_parent_documents_store), alongside raw journal logs or backup folders (/my_notebook_json_backups), are safely omitted from remote repository tracking.
+Repository Note: Local storage directories generated by the execution pipeline (/my_langchain_chroma_db and /my_parent_documents_store), alongside raw journal logs or backup folders (/my_notebook_json_backups), are safely omitted from remote repository tracking.
